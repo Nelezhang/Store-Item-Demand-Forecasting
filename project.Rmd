@@ -1,0 +1,535 @@
+---
+title: "Project"
+author: "Qi Zhang"
+date: "12/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+setwd('/Users/zhangnele/Downloads/MSBA/TimeSeries/project')
+```
+# Create dataframe
+```{r}
+sales.df <- read.csv('/Users/zhangnele/Downloads/MSBA/TimeSeries/project/demand-forecasting-kernels-only/train.csv')
+head(sales.df)
+```
+# Select item 1 in store 1
+```{r}
+attach(sales.df)
+itemsales.df <- sales.df[ which(store==1 & item==1),c(1, 4)]
+itemsales.df
+dim(itemsales.df)
+```
+# Aggredate sales by yearmonth 
+```{r}
+library(zoo)
+library(dplyr)
+
+grouped_sales <- itemsales.df %>% 
+   group_by(date = substr(date, 1, 7)) %>% 
+   summarise(sales = sum(sales))
+head(grouped_sales)
+write.csv(grouped_sales, "/Users/zhangnele/Downloads/MSBA/TimeSeries/project/demand-forecasting-kernels-only/grouped_sales.csv")
+```
+# Create time series dataset
+```{r}
+range(grouped_sales$date)
+sales.ts <- ts(grouped_sales$sales, 
+            start = c(2013, 1), end = c(2017, 12), freq = 12)
+sales.ts
+range(grouped_sales$sales)
+```
+# Visualise sales data. 
+```{r}
+
+plot(sales.ts, 
+     xlab = "Time", ylab = "Sale Quantity",
+     ylim = c (300, 1000), main = "Number of Item 1 sold in Store 1 between 2013 and 2017", bty = "l", lwd = 2, col="blue")
+axis(1, at = seq(1, 252), labels = format(seq(1, 252)))
+# The data plot shows upward trend and seasonality with the lower sales at the beginning of each year(Febrary), and peak sales at the middle of each year(June). After that, the sales start decreasing and reached a local maximum at around October.
+```
+
+# check its predictability
+```{r}
+# Using the AR(1) model for the historical data
+# Approach 1
+sales.ar1<- Arima(sales.ts, order = c(1,0,0))
+summary(sales.ar1)
+# Using the first differencing (lag-1) of the historical data and Acf() function the autocorrelation plot of the first differencing (lag-1) with the maximum of 12 lags to check predictability
+# Approach 2
+diff.sales <- diff(sales.ts, lag = 1)
+diff.sales
+
+Acf(diff.sales, lag.max = 12, main = "Autocorrelation Item Sales")
+
+```
+# Use stl() function to plot times series components of the original data. The plot includes original data, trend, seasonal, and reminder (level and noise component).
+```{r}
+sales.stl <- stl(sales.ts, s.window = "periodic")
+autoplot(sales.stl, main = "Item Sales Time Series Components")
+# we can see that the trend is linear and it has seasonal pattern. We can try simple linear regression with seasonality to see its accuracy. 
+# We will implement different models to check which one is the best model for most accurate prediction.
+# 1. Trailling MA: k = 2, k = 6, k = 12
+# 2. Naive model
+# 3. Seasonal Naive models 
+# 4. Regression model with linear trend
+# 5. Regression model with seasonality.
+# 6. Regression model with linear trend and seasonality.
+# 7. Regression model with quatratic trend and seasonality
+# 8. 2 level Regression model with quatratic trend and seasonality+AR(1)
+# 9. 2 level Regression model with quatratic trend, seasonality and trailing MA(k = 6).
+# 10. Advanced exponential smoothing methods: Holt-Winter's model (model = "ZZZ")(automated)
+# 11. Advanced exponential smoothing methods: Holt-Winter's model (model = "ZZZ")(automated) with AR(1)
+# 12. Auto ARIMA Model
+
+```
+# Apply Acf() function to identity possible time series components. 
+```{r}
+Acf(sales.ts, lag.max = 12, main = "Autocorrelation for Item Sales")
+# A positive autocorrelation coefficient in lag1 is substantially higher than the horizontal threshold(significantly greater than zero) and in several lag gradually drops to zero, which indicate an upward trend component and also of the level component in the sales dataset. A positive autocorrelation coefficient in lag 12, which is also statistically significant(greater than zero), points to monthly seasonality.
+```
+# Partition date
+```{r}
+nValid <- 24 
+nTrain <- length(sales.ts) - nValid
+train.ts <- window(sales.ts, start = c(2013, 1), end = c(2013, nTrain))
+valid.ts <- window(sales.ts, start = c(2013, nTrain + 1), 
+                   end = c(2013, nTrain + nValid))
+valid.ts
+train.ts
+```
+# 1. Trailing MA (k from 1 to 12)
+```{r}
+ma_evaluate <- function(k) {
+   ma.trailing <- rollmean(sales.ts, k = k, align = "right", fill = NA)
+   return(round(accuracy(ma.trailing, sales.ts), 3))
+}
+for (i in 2:12) {
+   print(paste("k =", i))
+   print(ma_evaluate(i))
+}
+
+ma.trailing_2 <- rollmean(sales.ts, k = 2, align = "right")
+ma.trailing_2
+round(accuracy(ma.trailing_2, sales.ts), 3)
+plot(sales.ts, 
+     xlab = "Time", ylab = "Sale Quantity",
+     ylim = c (200, 1300), main = "Number of Item 1 sold in Store 1 between 2013 and 2017", bty = "l", lwd = 2, col="blue")
+axis(1, at = seq(1, 252), labels = format(seq(1, 252)))
+lines(ma.trailing_2, col = "brown", lwd = 2, lty = 5)
+legend(2013,1300, legend = c("Trailing MA, k=2", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+
+```
+
+
+# 2. Naive model
+```{r}
+# Naive
+sales.naive.pred <- naive(train.ts, h = 24)
+sales.naive.pred$fitted
+train.ts
+round(accuracy(sales.naive.pred, valid.ts), 3)
+
+
+# Naive Plot
+plot(sales.naive.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Naive Forecast", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(sales.naive.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Naive Forecast", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 2600))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+# 3. Seasonal Naive model
+```{r}
+sales.snaive.pred <- snaive(train.ts, h = 24)
+round(accuracy(sales.snaive.pred, valid.ts), 3)
+
+# Seasonal Naive Plot
+plot(sales.snaive.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Seasonal Naive Forecast", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(sales.snaive.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Seasonal Naive Forecast", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 2600))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+# 4. Regression model with linear trend
+```{r}
+trend.train <- tslm(train.ts ~ trend)
+summary(trend.train)
+
+trend.train.pred <- forecast(trend.train, h = 24)
+round(accuracy(trend.train.pred, valid.ts), 3)
+trend.train.pred$fitted
+
+plot(trend.train.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Regression model with linear trend", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(trend.train.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Regression with linear trend", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 2600))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+# 5. Regression model with seasonality.
+```{r}
+season.train <- tslm(train.ts ~ season)
+summary(season.train)
+
+season.train.pred <- forecast(season.train, h = 24)
+round(accuracy(season.train.pred, valid.ts), 3)
+
+plot(season.train.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Regression model with Seasonality", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(season.train.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Regression with Seasonality", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 2600))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+
+
+# 6. Regression model with linear trend and seasonality
+```{r}
+linear.trend.season.train <- tslm(train.ts ~ trend + season)
+summary(linear.trend.season.train)
+linear.trend.season.train.pred <- forecast(linear.trend.season.train, h = nValid)
+round(accuracy(linear.trend.season.train.pred, valid.ts), 3)
+
+
+plot(linear.trend.season.train.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Regression model with linear Trend and Seasonality", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(linear.trend.season.train.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Regression with linear Trend and Seasonality", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+
+# 7. Regression model with quatratic trend and seasonality
+```{r}
+qua.trend.season.train <- tslm(train.ts ~ trend + I(trend^2) + season)
+summary(qua.trend.season.train)
+qua.trend.season.train.pred <- forecast(qua.trend.season.train, h = nValid)
+round(accuracy(qua.trend.season.train.pred, valid.ts), 3)
+```
+# 8. Regression model with quatratic trend and seasonality + AR(1)
+```{r}
+# Check residual of the quadratic trend and seasonality model
+Acf(qua.trend.season.train$residuals,lag.max = 12)
+qua.res.ar1 <- Arima(qua.trend.season.train$residuals, order = c(1,0,0))
+qua.res.ar1.pred <- forecast(qua.res.ar1, h = nValid)
+qua.trend.season.ar1.pred <- qua.trend.season.train.pred$mean + qua.res.ar1.pred$mean
+round(accuracy(qua.trend.season.ar1.pred, valid.ts), 3)
+
+plot(qua.trend.season.ar1.pred, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Regression model with Quatratic Trend and Seasonality with AR(1)", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(qua.trend.season.train$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Regression with Quadratic Trend and Seasonality with AR(1)", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+
+```
+
+# 9. 2 level forecast with quatratic trend, seasonality and trailing MA(k from 1 to 12) for residual.
+```{r}
+Acf(qua.trend.season.train$residuals)
+```
+
+```{r}
+k_evaluate <- function(k){
+   ma.trailing.res <- rollmean(qua.trend.season.train$residuals, k = k, align = "right")
+   ma.trailing.res.pred <- forecast(ma.trailing.res, h = 24, level = 0)
+   ts.forecast <- qua.trend.season.train.pred$mean + ma.trailing.res.pred$mean
+   return(round(accuracy(ts.forecast, valid.ts), 3))
+   
+}
+for(i in 1: 12) {
+   print(paste("k =", i))
+   print(k_evaluate(i))
+}
+# When k = 6, MAPE and RMSE are best/lowest. 
+```
+
+```{r}
+# k = 6
+k_evaluate(6)
+# (round(accuracy(ts.forecast, valid.ts), 3))
+
+ma.trailing_6.res <- rollmean(qua.trend.season.train$residuals, k = 6, align = "right")
+ma.trailing.res.pred <- forecast(ma.trailing_6.res, h = 24, level = 0)
+ts.forecast<- qua.trend.season.train.pred$mean + ma.trailing.res.pred$mean
+round(accuracy(ts.forecast, valid.ts), 3)
+
+plot(ts.forecast, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Regression with Quatratic linear Trend, Seasonality and Trailing MA(k=6)", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(qua.trend.season.train.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Regression with Quatratic linear Trend, Seasonality and Trailing MA(k=6)", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+# 10. Advanced exponential smoothing methods: Holt-Winter's model (model = "ZZZ")(automated)
+```{r}
+hw.ZZZ.opt <- ets(train.ts, model = "ZZZ")
+hw.ZZZ.opt
+hw.ZZZ.pred <- forecast(hw.ZZZ.opt, h = 24, level = 0)
+hw.ZZZ.pred
+round(accuracy(hw.ZZZ.pred, valid.ts), 3)
+
+plot(hw.ZZZ.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Automated Holt-Winter's model", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(hw.ZZZ.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Automated Holt-Winter's model", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+# 11. Advanced exponential smoothing methods: Holt-Winter's model (model = "ZZZ")(automated) with AR(1)
+```{r}
+Acf(hw.ZZZ.opt$residuals, lag.max = 12)
+hw.res.ar1 <- Arima(hw.ZZZ.opt$residuals, order = c(1,0,0))
+summary(hw.res.ar1)
+Acf(hw.res.ar1$residuals, lag.max = 12, 
+    main = "Autocorrelation for Item Sales Training Residuals of Residuals")
+hw.res.ar1.pred <- forecast(res.ar1, h = nValid, level = 0)
+hw.valid.two.level.pred <- hw.ZZZ.pred$mean + hw.res.ar1.pred$mean
+round(accuracy(hw.valid.two.level.pred, valid.ts), 3)
+
+plot(hw.valid.two.level.pred, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Automated Holt-Winter's model with AR(1)", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(hw.ZZZ.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Automated Holt-Winter's model with AR(1)", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+
+
+
+
+# 12. Auto ARIMA Model
+```{r}
+train.auto.arima <- auto.arima(train.ts)
+summary(train.auto.arima)
+```
+
+```{r}
+train.auto.arima.pred <- forecast(train.auto.arima, h = nValid, level = 0)
+train.auto.arima.pred
+round(accuracy(train.auto.arima.pred, valid.ts), 3)
+
+plot(train.auto.arima.pred$mean, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2018), lty = 5,
+     ylim = c (300, 1300), main = "Automated ARIMA model", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(train.auto.arima.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1300, legend = c("Automated ARIMA model", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2016, 2016), c(0, 1100))
+text(2014.5, 1000, "Training")
+text(2017, 1000, "Validation")
+arrows(2013, 950, 2015.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2016.25, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+
+```
+# Comparison of all models
+1. Trailing MA (k =2):
+round(accuracy(ma.trailing_2, sales.ts), 3)
+            ME   RMSE    MAE    MPE  MAPE  ACF1 Theil's U
+Test set 1.737 45.547 36.025 -0.263 6.236 0.082       0.5
+
+2. Naive model
+round(accuracy(sales.naive.pred, valid.ts), 3)
+                  ME    RMSE     MAE    MPE   MAPE  MASE   ACF1
+Training set   3.771  94.084  74.971 -0.692 13.986 1.193 -0.047
+Test set     208.625 247.367 210.375 28.163 28.552 3.348  0.710
+             Theil's U
+Training set        NA
+Test set         2.508
+
+3. Seasonal Naive model
+round(accuracy(sales.snaive.pred, valid.ts), 3)
+                 ME   RMSE    MAE    MPE   MAPE  MASE   ACF1 Theil's U
+Training set 61.750 70.746 62.833 10.194 10.455 1.000  0.405        NA
+Test set     43.042 52.582 46.208  6.627  7.104 0.735 -0.059     0.609
+
+4. Regression model with linear trend
+round(accuracy(trend.train.pred, valid.ts), 3)
+                  ME    RMSE     MAE     MPE   MAPE  MASE  ACF1
+Training set   0.000 111.353  89.501  -4.470 17.614 1.424 0.584
+Test set     -69.548 148.690 118.787 -14.969 20.815 1.891 0.706
+             Theil's U
+Training set        NA
+Test set         1.883
+
+5. Regression model with seasonality.
+round(accuracy(season.train.pred, valid.ts), 3)
+                  ME    RMSE     MAE    MPE   MAPE  MASE  ACF1
+Training set   0.000  54.475  46.648 -0.945  8.519 0.742 0.853
+Test set     101.375 108.160 101.375 15.118 15.118 1.613 0.127
+             Theil's U
+Training set        NA
+Test set         1.185
+
+6. Regression model with linear trend and seasonality with AR(1)
+round(accuracy(linear.trend.season.train.pred, valid.ts), 3)
+              ME   RMSE    MAE    MPE  MAPE  MASE  ACF1 Theil's U
+Training set   0 20.628 17.241 -0.093 3.302 0.274 0.365        NA
+Test set     -53 69.323 58.903 -8.927 9.657 0.937 0.373     0.875
+
+
+7. Regression model with quatratic trend and seasonality
+round(accuracy(qua.trend.season.train.pred, valid.ts), 3)
+                  ME   RMSE    MAE    MPE  MAPE  MASE  ACF1 Theil's U
+Training set   0.000 20.590 17.223 -0.088 3.298 0.274 0.368        NA
+Test set     -42.024 59.841 50.099 -7.256 8.270 0.797 0.309     0.765
+
+8. 2 level Regression model with quatratic trend and seasonality+AR(1)
+round(accuracy(qua.trend.season.ar1.pred, valid.ts), 3)
+              ME   RMSE    MAE    MPE  MAPE  ACF1 Theil's U
+Test set -41.226 59.176 49.433 -7.106 8.138 0.309     0.759
+
+9. 2 level forecast with quatratic trend, seasonality and trailing MA(k = 6) for residual.
+round(accuracy(ts.forecast, valid.ts), 3)
+              ME   RMSE    MAE    MPE MAPE  ACF1 Theil's U
+Test set -13.076 42.876 35.799 -2.901 5.88 0.196     0.538
+
+10. Advanced exponential smoothing methods: Holt-Winter's model (model = "Z,Z,Z")(automated)
+round(accuracy(hw.ZZZ.pred, valid.ts), 3)
+                  ME   RMSE    MAE     MPE   MAPE  MASE  ACF1 Theil's U
+Training set  -3.905 19.085 16.149  -0.756  3.094 0.257 0.188        NA
+Test set     -68.760 84.880 69.776 -10.346 10.491 1.110 0.082     0.984
+
+11. Advanced exponential smoothing methods: Holt-Winter's model (model = "Z,Z,Z")(automated) with AR(1)
+round(accuracy(hw.valid.two.level.pred, valid.ts), 3)
+              ME   RMSE    MAE     MPE   MAPE  ACF1 Theil's U
+Test set -67.831 84.292 68.903 -10.173 10.326 0.091     0.979
+
+12. Auto ARIMA Model
+round(accuracy(train.auto.arima.pred, valid.ts), 3)
+                  ME   RMSE    MAE    MPE  MAPE  MASE   ACF1 Theil's U
+Training set  -0.474 25.571 17.056 -0.376 3.018 0.271 -0.099        NA
+Test set     -50.347 63.654 51.049 -7.859 7.949 0.812  0.369     0.751
+
+```{r}
+# The best model is 2 level forecast with quatratic trend, seasonality and trailing MA(k = 6) for residual. So we apply it on the whole dataset
+qua.trend.season.whole <- tslm(sales.ts ~ trend + I(trend^2) + season)
+summary(qua.trend.season.whole)
+qua.trend.season.whole.pred <- forecast(qua.trend.season.whole, h = 12)
+
+ma.trailing_6.whole.res <- rollmean(qua.trend.season.whole$residuals, k = 6, align = "right")
+ma.trailing.whole.res.pred <- forecast(ma.trailing_6.whole.res, h = 6, level = 0)
+ts.whole.forecast<- qua.trend.season.whole.pred$mean + ma.trailing.whole.res.pred$mean
+round(accuracy(qua.trend.season.whole.pred$fitted, sales.ts), 3)
+
+
+plot(ts.whole.forecast, 
+     xlab = "Time", ylab = "Sale Quantity", xaxt = "n", xlim = c(2013, 2019), lty = 5,
+     ylim = c (300, 1400), main = "Regression with Quatratic linear Trend, Seasonality and Trailing MA(k=6) Entire", bty = "l", lwd = 2, col="brown")
+axis(1, at = seq(2013, 2018, 1), labels = format(seq(2013, 2018, 1)))
+lines(qua.trend.season.whole.pred$fitted, col = "brown", lwd = 2, lty = 5)
+lines(sales.ts, col = "blue", lty = 1, lwd = 2)
+legend(2013,1400, legend = c("Regression with Quatratic linear Trend, Seasonality and Trailing MA(k=6)", "Sale Quantity"), 
+                  col = c("brown", "blue"), 
+                  lty = c(5, 1), lwd =c(2, 2), bty = "n")
+lines(c(2018, 2018), c(0, 1100))
+text(2015.5, 1050, "Training")
+text(2018.6, 1050, "Future")
+arrows(2013, 950, 2017.75, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+arrows(2018.25, 950, 2019, 950, code = 3, length = 0.1,
+       lwd = 1, angle = 30)
+```
+
+
